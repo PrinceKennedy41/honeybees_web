@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
 type Hive = {
@@ -13,7 +13,8 @@ type Hive = {
   closes_at: string;
   created_at: string;
 
-  // Harvest fields (added via SQL)
+  bee_count?: number;
+
   thank_you_message?: string | null;
   harvested_at?: string | null;
   harvest_notified_at?: string | null;
@@ -29,12 +30,17 @@ type MessageRow = {
 
 export default function HivePage() {
   const params = useParams<{ id: string }>();
+  const searchParams = useSearchParams();
+
   const hiveId = params.id;
+  const token = searchParams.get("token") ?? "";
 
   const [hive, setHive] = useState<Hive | null>(null);
+  const [authorized, setAuthorized] = useState(false);
+
   const [messages, setMessages] = useState<MessageRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadingMessages, setLoadingMessages] = useState(true);
+  const [loadingHive, setLoadingHive] = useState(true);
+  const [loadingMessages, setLoadingMessages] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Contribution form state
@@ -51,12 +57,12 @@ export default function HivePage() {
   const [savingEmail, setSavingEmail] = useState(false);
   const [emailError, setEmailError] = useState<string | null>(null);
 
-  // Harvest UI state (Step 6 additions)
+  // Harvest UI state
   const [thankYou, setThankYou] = useState("");
   const [harvesting, setHarvesting] = useState(false);
   const [harvestResult, setHarvestResult] = useState<string | null>(null);
 
-  const now = useMemo(() => new Date(), []); // fine for MVP (computed once)
+  const now = useMemo(() => new Date(), []);
 
   const isRevealed = useMemo(() => {
     if (!hive) return false;
@@ -70,22 +76,22 @@ export default function HivePage() {
     return new Date(hive.closes_at) <= now;
   }, [hive, now]);
 
-  const shareUrl = useMemo(() => {
+  const contributorShareUrl = useMemo(() => {
     if (typeof window === "undefined") return "";
-    return window.location.href;
-  }, []);
+    return `${window.location.origin}/hive/${hiveId}`;
+  }, [hiveId]);
 
   async function loadHive() {
     setError(null);
-    setLoading(true);
+    setLoadingHive(true);
 
     const { data, error } = await supabase
       .from("hives")
-      .select("*")
+      .select("id,title,recipient_name,mode,reveal_at,closes_at,created_at,bee_count,thank_you_message,harvested_at,harvest_notified_at")
       .eq("id", hiveId)
       .single();
 
-    setLoading(false);
+    setLoadingHive(false);
 
     if (error) {
       setError(error.message);
@@ -95,39 +101,68 @@ export default function HivePage() {
     setHive(data as Hive);
   }
 
-  async function loadMessages() {
-    setLoadingMessages(true);
-
-    const { data, error } = await supabase
-      .from("messages")
-      .select("*")
-      .eq("hive_id", hiveId)
-      .order("created_at", { ascending: false });
-
-    setLoadingMessages(false);
-
-    if (error) {
-      console.error(error);
+  async function checkAccess() {
+    // No token = not authorized (public contributor view)
+    if (!token) {
+      setAuthorized(false);
       return;
     }
 
-    setMessages((data ?? []) as MessageRow[]);
+    const res = await fetch("/api/hive-access", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hiveId, token }),
+    });
+
+    const data = await res.json();
+    setAuthorized(Boolean(data.authorized));
+  }
+
+  async function loadMessagesIfAllowed() {
+    if (!token) return;
+    if (!authorized) return;
+    if (!isRevealed) return;
+
+    setLoadingMessages(true);
+
+    const res = await fetch("/api/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hiveId, token }),
+    });
+
+    const data = await res.json();
+    setLoadingMessages(false);
+
+    if (!res.ok) {
+      console.log("Messages fetch failed:", data);
+      return;
+    }
+
+    setMessages((data.messages ?? []) as MessageRow[]);
   }
 
   useEffect(() => {
     loadHive();
-    loadMessages();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hiveId]);
 
+  useEffect(() => {
+    checkAccess();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hiveId, token]);
+
+  useEffect(() => {
+    loadMessagesIfAllowed();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authorized, isRevealed]);
+
   function startPreview() {
     setSubmitError(null);
-
     if (!name.trim() || !note.trim()) {
       setSubmitError("Please add your name and a message before continuing.");
       return;
     }
-
     setIsPreviewing(true);
   }
 
@@ -155,7 +190,11 @@ export default function HivePage() {
     setName("");
     setNote("");
 
-    await loadMessages();
+    // Update bee_count display by reloading hive
+    await loadHive();
+
+    // If authorized + revealed, refresh message list too
+    await loadMessagesIfAllowed();
   }
 
   async function saveEmailForHarvest() {
@@ -185,18 +224,22 @@ export default function HivePage() {
     setEmailSaved(true);
   }
 
-  async function copyLink() {
+  async function copyContributorLink() {
     try {
-      await navigator.clipboard.writeText(shareUrl);
-      alert("Hive link copied.");
+      await navigator.clipboard.writeText(contributorShareUrl);
+      alert("Contributor link copied.");
     } catch {
-      alert("Could not copy link. You can select and copy it manually.");
+      alert("Could not copy automatically. Please select and copy manually.");
     }
   }
 
-  // Step 6 function: Harvest & send thank-you via API
   async function harvestAndSend() {
     setHarvestResult(null);
+
+    if (!authorized) {
+      setHarvestResult("Only the moderator or recipient can harvest this Hive.");
+      return;
+    }
 
     if (!thankYou.trim()) {
       setHarvestResult("Please write a thank-you message first.");
@@ -209,10 +252,24 @@ export default function HivePage() {
       const res = await fetch("/api/harvest", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ hiveId, thankYouMessage: thankYou.trim() }),
+        body: JSON.stringify({
+          hiveId,
+          token, // ✅ protect harvest
+          thankYouMessage: thankYou.trim(),
+        }),
       });
 
-      const data = await res.json();
+      const text = await res.text();
+      let data: any = null;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        setHarvesting(false);
+        setHarvestResult(`Harvest failed. Status ${res.status}.`);
+        console.log("Raw /api/harvest response:", text);
+        return;
+      }
+
       setHarvesting(false);
 
       if (!res.ok) {
@@ -221,7 +278,6 @@ export default function HivePage() {
       }
 
       setHarvestResult(`Harvest complete. Emails sent: ${data.sent}`);
-      // reload hive so harvested flags show up if you want them later
       await loadHive();
     } catch (e: any) {
       setHarvesting(false);
@@ -229,7 +285,7 @@ export default function HivePage() {
     }
   }
 
-  if (loading) {
+  if (loadingHive) {
     return (
       <main className="min-h-screen p-8 max-w-2xl mx-auto">
         <p>Loading Hive...</p>
@@ -240,34 +296,38 @@ export default function HivePage() {
   if (error || !hive) {
     return (
       <main className="min-h-screen p-8 max-w-2xl mx-auto">
-        <p className="text-red-600">
-          Could not load Hive: {error ?? "Unknown error"}
-        </p>
+        <p className="text-red-600">Could not load Hive: {error ?? "Unknown error"}</p>
       </main>
     );
   }
 
-  const totalBees = messages.length;
+  const totalBees = hive.bee_count ?? 0;
   const alreadyHarvested = Boolean(hive.harvest_notified_at);
 
   return (
     <main className="min-h-screen p-8 max-w-2xl mx-auto">
       <h1 className="text-3xl font-semibold">{hive.title}</h1>
       <p className="mt-2 text-gray-600">
-        A Hive has been created for{" "}
-        <span className="font-medium">{hive.recipient_name}</span>.
+        A Hive has been created for <span className="font-medium">{hive.recipient_name}</span>.
       </p>
 
       <div className="mt-4 text-sm text-gray-500">
         <p>Bees gathered: {totalBees}</p>
         <p>Closes at: {new Date(hive.closes_at).toLocaleString()}</p>
-        {hive.reveal_at && (
-          <p>Reveal at: {new Date(hive.reveal_at).toLocaleString()}</p>
-        )}
+        {hive.reveal_at && <p>Reveal at: {new Date(hive.reveal_at).toLocaleString()}</p>}
       </div>
 
-      {/* Harvest box (Step 6 UI) */}
-      {isClosed && (
+      {!authorized && (
+        <div className="mt-6 rounded-2xl border p-4 text-sm text-gray-700">
+          <p className="font-medium">Privacy note</p>
+          <p className="mt-1">
+            Messages and contributor names are only visible to the moderator and recipient.
+          </p>
+        </div>
+      )}
+
+      {/* Harvest (only for authorized viewers) */}
+      {authorized && isClosed && (
         <section className="mt-8 rounded-2xl border p-6">
           <h2 className="text-xl font-semibold">Harvest</h2>
 
@@ -278,8 +338,7 @@ export default function HivePage() {
           ) : (
             <>
               <p className="mt-1 text-gray-600">
-                The Hive is closed. Write a thank-you message to send to
-                contributors who opted in.
+                The Hive is closed. Write a thank-you message to send to contributors who opted in.
               </p>
 
               <textarea
@@ -297,9 +356,7 @@ export default function HivePage() {
                 {harvesting ? "Harvesting..." : "Harvest & Send Thank-you"}
               </button>
 
-              {harvestResult && (
-                <p className="mt-3 text-sm text-gray-700">{harvestResult}</p>
-              )}
+              {harvestResult && <p className="mt-3 text-sm text-gray-700">{harvestResult}</p>}
             </>
           )}
         </section>
@@ -313,9 +370,7 @@ export default function HivePage() {
         </p>
 
         {isClosed ? (
-          <p className="mt-4 text-gray-700">
-            This Hive is closed. No new honey can be added.
-          </p>
+          <p className="mt-4 text-gray-700">This Hive is closed. No new honey can be added.</p>
         ) : (
           <>
             {!submitted ? (
@@ -323,9 +378,7 @@ export default function HivePage() {
                 {!isPreviewing ? (
                   <div className="mt-4 space-y-4">
                     <div>
-                      <label className="block text-sm font-medium">
-                        Your name
-                      </label>
+                      <label className="block text-sm font-medium">Your name</label>
                       <input
                         className="mt-1 w-full rounded-lg border p-2"
                         value={name}
@@ -335,9 +388,7 @@ export default function HivePage() {
                     </div>
 
                     <div>
-                      <label className="block text-sm font-medium">
-                        Your message
-                      </label>
+                      <label className="block text-sm font-medium">Your message</label>
                       <textarea
                         className="mt-1 w-full rounded-lg border p-2 min-h-[120px]"
                         value={note}
@@ -346,9 +397,7 @@ export default function HivePage() {
                       />
                     </div>
 
-                    {submitError && (
-                      <p className="text-red-600 text-sm">{submitError}</p>
-                    )}
+                    {submitError && <p className="text-red-600 text-sm">{submitError}</p>}
 
                     <button
                       onClick={startPreview}
@@ -362,14 +411,10 @@ export default function HivePage() {
                     <p className="text-sm text-gray-500">Preview</p>
                     <div className="mt-2 rounded-xl border p-4">
                       <p className="font-medium">{name.trim()}</p>
-                      <p className="mt-2 whitespace-pre-wrap text-gray-800">
-                        {note.trim()}
-                      </p>
+                      <p className="mt-2 whitespace-pre-wrap text-gray-800">{note.trim()}</p>
                     </div>
 
-                    {submitError && (
-                      <p className="mt-3 text-red-600 text-sm">{submitError}</p>
-                    )}
+                    {submitError && <p className="mt-3 text-red-600 text-sm">{submitError}</p>}
 
                     <div className="mt-4 flex gap-3">
                       <button
@@ -389,22 +434,18 @@ export default function HivePage() {
                     </div>
 
                     <p className="mt-3 text-xs text-gray-500">
-                      Take a moment to make sure this is exactly what you want
-                      to share.
+                      Take a moment to make sure this is exactly what you want to share.
                     </p>
                   </div>
                 )}
               </>
             ) : (
               <div className="mt-4">
-                <p className="text-gray-800 font-medium">
-                  Thank you. Your honey was added.
-                </p>
+                <p className="text-gray-800 font-medium">Thank you. Your honey was added.</p>
 
                 <div className="mt-4 rounded-xl border p-4">
                   <p className="text-sm text-gray-600">
-                    Want to receive a message when the Hive is harvested and{" "}
-                    {hive.recipient_name} sends a thank-you?
+                    Want to receive a message when the Hive is harvested and {hive.recipient_name} sends a thank-you?
                   </p>
 
                   <div className="mt-3 flex gap-2">
@@ -423,26 +464,15 @@ export default function HivePage() {
                     </button>
                   </div>
 
-                  {emailSaved && (
-                    <p className="mt-2 text-sm text-green-700">
-                      Saved. You’ll be notified at harvest.
-                    </p>
-                  )}
-                  {emailError && (
-                    <p className="mt-2 text-sm text-red-600">{emailError}</p>
-                  )}
+                  {emailSaved && <p className="mt-2 text-sm text-green-700">Saved. You’ll be notified at harvest.</p>}
+                  {emailError && <p className="mt-2 text-sm text-red-600">{emailError}</p>}
                 </div>
 
                 <div className="mt-4 rounded-xl border p-4">
-                  <p className="text-sm text-gray-600">
-                    Know someone else who would like to contribute?
-                  </p>
-                  <p className="mt-2 break-all text-gray-800">{shareUrl}</p>
-                  <button
-                    onClick={copyLink}
-                    className="mt-3 w-full rounded-xl border py-3 font-medium"
-                  >
-                    Copy Hive link
+                  <p className="text-sm text-gray-600">Know someone else who would like to contribute?</p>
+                  <p className="mt-2 break-all text-gray-800">{contributorShareUrl}</p>
+                  <button onClick={copyContributorLink} className="mt-3 w-full rounded-xl border py-3 font-medium">
+                    Copy contributor link
                   </button>
                 </div>
 
@@ -463,58 +493,34 @@ export default function HivePage() {
         )}
       </section>
 
-      {/* Messages display (NOTE: this is not private yet—see note below) */}
+      {/* Messages display (authorized only) */}
       <section className="mt-8 rounded-2xl border p-6">
         <h2 className="text-xl font-semibold">Honey in the Hive</h2>
 
-        {!isRevealed ? (
+        {!authorized ? (
           <p className="mt-2 text-gray-700">
-            This Hive is in <span className="font-medium">Reveal Mode</span>.
-            Messages will be visible at reveal time.
+            Messages are private and only visible to the moderator and recipient.
           </p>
+        ) : !isRevealed ? (
+          <p className="mt-2 text-gray-700">
+            This Hive is in <span className="font-medium">Reveal Mode</span>. Messages will be visible at reveal time.
+          </p>
+        ) : loadingMessages ? (
+          <p className="mt-2">Loading messages...</p>
+        ) : messages.length === 0 ? (
+          <p className="mt-2 text-gray-700">No honey yet. Be the first to add a message.</p>
         ) : (
-          <>
-            {loadingMessages ? (
-              <p className="mt-2">Loading messages...</p>
-            ) : messages.length === 0 ? (
-              <p className="mt-2 text-gray-700">
-                No honey yet. Be the first to add a message.
-              </p>
-            ) : (
-              <div className="mt-4 space-y-3">
-                {messages.map((m) => (
-                  <div key={m.id} className="rounded-xl border p-4">
-                    <p className="font-medium">{m.contributor_name}</p>
-                    <p className="mt-2 whitespace-pre-wrap text-gray-800">
-                      {m.message}
-                    </p>
-                    <p className="mt-2 text-xs text-gray-500">
-                      {new Date(m.created_at).toLocaleString()}
-                    </p>
-                  </div>
-                ))}
+          <div className="mt-4 space-y-3">
+            {messages.map((m) => (
+              <div key={m.id} className="rounded-xl border p-4">
+                <p className="font-medium">{m.contributor_name}</p>
+                <p className="mt-2 whitespace-pre-wrap text-gray-800">{m.message}</p>
+                <p className="mt-2 text-xs text-gray-500">{new Date(m.created_at).toLocaleString()}</p>
               </div>
-            )}
-          </>
+            ))}
+          </div>
         )}
       </section>
-
-      {/* Moderator share link */}
-      <section className="mt-8 rounded-2xl border p-6">
-        <p className="font-medium">Moderator share link:</p>
-        <p className="mt-2 break-all text-gray-700">{shareUrl}</p>
-        <button
-          onClick={copyLink}
-          className="mt-3 w-full rounded-xl border py-3 font-medium"
-        >
-          Copy Hive link
-        </button>
-      </section>
-
-      {/* IMPORTANT PRIVACY NOTE (for you, as builder):
-          If you truly want ONLY moderator+recipient to see messages,
-          we must remove public SELECT access to the messages table and use a private view mechanism.
-      */}
     </main>
   );
 }

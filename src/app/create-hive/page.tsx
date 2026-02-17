@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabaseClient";
 
 export default function CreateHivePage() {
   const router = useRouter();
@@ -14,6 +13,22 @@ export default function CreateHivePage() {
   const [closesAt, setClosesAt] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const [created, setCreated] = useState<null | {
+    hiveId: string;
+    contributorLink: string;
+    moderatorLink: string;
+    recipientLink: string;
+  }>(null);
+
+  async function copy(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      alert("Copied.");
+    } catch {
+      alert("Could not copy automatically—please select and copy manually.");
+    }
+  }
 
   async function handleCreate() {
     setError(null);
@@ -30,65 +45,91 @@ export default function CreateHivePage() {
 
     setLoading(true);
 
-    const payload = {
-      title: title.trim(),
-      recipient_name: recipientName.trim(),
-      mode,
-      reveal_at: mode === "reveal" ? new Date(revealAt).toISOString() : null,
-      closes_at: new Date(closesAt).toISOString(),
-    };
+    const res = await fetch("/api/create-hive", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title,
+        recipientName,
+        mode,
+        revealAt: mode === "reveal" ? revealAt : undefined,
+        closesAt,
+      }),
+    });
 
-    const { data, error: insertError } = await supabase
-      .from("hives")
-      .insert(payload)
-      .select("id")
-      .single();
-
+    const data = await res.json();
     setLoading(false);
 
-    if (insertError) {
-      setError(insertError.message);
+    if (!res.ok) {
+      setError(data.error ?? "Create failed.");
       return;
     }
 
-    router.push(`/hive/${data.id}`);
+    setCreated(data);
+  }
+
+  if (created) {
+    return (
+      <main className="min-h-screen p-8 max-w-xl mx-auto">
+        <h1 className="text-3xl font-semibold">Hive created</h1>
+        <p className="mt-2 text-gray-600">
+          Share the contributor link with your community. Keep the moderator/recipient links private.
+        </p>
+
+        <div className="mt-6 rounded-2xl border p-6 space-y-4">
+          <div>
+            <p className="text-sm font-medium">Contributor link (public)</p>
+            <p className="mt-1 break-all">{created.contributorLink}</p>
+            <button className="mt-2 w-full rounded-xl border py-3 font-medium" onClick={() => copy(created.contributorLink)}>
+              Copy contributor link
+            </button>
+          </div>
+
+          <div>
+            <p className="text-sm font-medium">Moderator link (private)</p>
+            <p className="mt-1 break-all">{created.moderatorLink}</p>
+            <button className="mt-2 w-full rounded-xl border py-3 font-medium" onClick={() => copy(created.moderatorLink)}>
+              Copy moderator link
+            </button>
+          </div>
+
+          <div>
+            <p className="text-sm font-medium">Recipient link (private)</p>
+            <p className="mt-1 break-all">{created.recipientLink}</p>
+            <button className="mt-2 w-full rounded-xl border py-3 font-medium" onClick={() => copy(created.recipientLink)}>
+              Copy recipient link
+            </button>
+          </div>
+
+          <button
+            className="w-full rounded-xl bg-black text-white py-3 font-medium"
+            onClick={() => router.push(`/hive/${created.hiveId}?token=${created.moderatorLink.split("token=")[1]}`)}
+          >
+            Open hive as moderator
+          </button>
+        </div>
+      </main>
+    );
   }
 
   return (
     <main className="min-h-screen p-8 max-w-xl mx-auto">
       <h1 className="text-3xl font-semibold">Create a Hive</h1>
-      <p className="mt-2 text-gray-600">
-        This is the moderator flow. You’ll share the link after creation.
-      </p>
 
       <div className="mt-8 space-y-4">
         <div>
           <label className="block text-sm font-medium">Hive title</label>
-          <input
-            className="mt-1 w-full rounded-lg border p-2"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="e.g., Promotion Hive for Sgt. Smith"
-          />
+          <input className="mt-1 w-full rounded-lg border p-2" value={title} onChange={(e) => setTitle(e.target.value)} />
         </div>
 
         <div>
           <label className="block text-sm font-medium">Recipient name</label>
-          <input
-            className="mt-1 w-full rounded-lg border p-2"
-            value={recipientName}
-            onChange={(e) => setRecipientName(e.target.value)}
-            placeholder="e.g., Sgt. Smith"
-          />
+          <input className="mt-1 w-full rounded-lg border p-2" value={recipientName} onChange={(e) => setRecipientName(e.target.value)} />
         </div>
 
         <div>
           <label className="block text-sm font-medium">Mode</label>
-          <select
-            className="mt-1 w-full rounded-lg border p-2"
-            value={mode}
-            onChange={(e) => setMode(e.target.value as "live" | "reveal")}
-          >
+          <select className="mt-1 w-full rounded-lg border p-2" value={mode} onChange={(e) => setMode(e.target.value as any)}>
             <option value="live">Live</option>
             <option value="reveal">Reveal</option>
           </select>
@@ -97,32 +138,18 @@ export default function CreateHivePage() {
         {mode === "reveal" && (
           <div>
             <label className="block text-sm font-medium">Reveal date/time</label>
-            <input
-              type="datetime-local"
-              className="mt-1 w-full rounded-lg border p-2"
-              value={revealAt}
-              onChange={(e) => setRevealAt(e.target.value)}
-            />
+            <input type="datetime-local" className="mt-1 w-full rounded-lg border p-2" value={revealAt} onChange={(e) => setRevealAt(e.target.value)} />
           </div>
         )}
 
         <div>
           <label className="block text-sm font-medium">Closure (Harvest) date/time</label>
-          <input
-            type="datetime-local"
-            className="mt-1 w-full rounded-lg border p-2"
-            value={closesAt}
-            onChange={(e) => setClosesAt(e.target.value)}
-          />
+          <input type="datetime-local" className="mt-1 w-full rounded-lg border p-2" value={closesAt} onChange={(e) => setClosesAt(e.target.value)} />
         </div>
 
         {error && <p className="text-red-600 text-sm">{error}</p>}
 
-        <button
-          onClick={handleCreate}
-          disabled={loading}
-          className="w-full rounded-xl bg-black text-white py-3 font-medium disabled:opacity-50"
-        >
+        <button onClick={handleCreate} disabled={loading} className="w-full rounded-xl bg-black text-white py-3 font-medium disabled:opacity-50">
           {loading ? "Creating..." : "Create Hive"}
         </button>
       </div>

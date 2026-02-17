@@ -8,8 +8,9 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 
 export async function POST(req: Request) {
   try {
-    const { hiveId, thankYouMessage } = (await req.json()) as {
+    const { hiveId, token, thankYouMessage } = (await req.json()) as {
       hiveId: string;
+      token?: string;
       thankYouMessage: string;
     };
 
@@ -18,6 +19,29 @@ export async function POST(req: Request) {
         { error: "Missing hiveId or thankYouMessage" },
         { status: 400 }
       );
+    }
+
+    // ✅ Require token (moderator or recipient)
+    if (!token) {
+      return NextResponse.json({ error: "Not authorized" }, { status: 401 });
+    }
+
+    // ✅ Validate token against hive_secrets
+    const { data: secrets, error: secErr } = await supabaseAdmin
+      .from("hive_secrets")
+      .select("moderator_token, recipient_token")
+      .eq("hive_id", hiveId)
+      .single();
+
+    if (secErr || !secrets) {
+      return NextResponse.json({ error: "Not authorized" }, { status: 401 });
+    }
+
+    const authorized =
+      token === secrets.moderator_token || token === secrets.recipient_token;
+
+    if (!authorized) {
+      return NextResponse.json({ error: "Not authorized" }, { status: 401 });
     }
 
     // Load hive
@@ -82,9 +106,10 @@ export async function POST(req: Request) {
     }
 
     const siteUrl = process.env.NEXT_PUBLIC_SITE_URL!;
-    const hiveUrl = `${siteUrl}/hive/${hiveId}`;
+    const hiveUrl = `${siteUrl}/hive/${hiveId}?token=${encodeURIComponent(
+      token
+    )}`;
 
-    // For early testing. Later we’ll switch this to your verified domain.
     const from = "Honeybees <onboarding@resend.dev>";
     const subject = "The Hive has been harvested";
 
@@ -101,7 +126,6 @@ export async function POST(req: Request) {
       </div>
     `;
 
-    // Send individually (simple + reliable for MVP)
     let sent = 0;
     for (const to of emails) {
       await resend.emails.send({ from, to, subject, html });
@@ -126,5 +150,4 @@ function escapeHtml(str: string) {
     .replaceAll("'", "&#039;");
 }
 
-// Belt-and-suspenders: ensures TS always treats this file as a module
 export {};
