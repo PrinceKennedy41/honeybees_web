@@ -1,16 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 
 export default function CreateHivePage() {
-  const router = useRouter();
-
   const [title, setTitle] = useState("");
   const [recipientName, setRecipientName] = useState("");
   const [mode, setMode] = useState<"live" | "reveal">("live");
   const [revealAt, setRevealAt] = useState("");
   const [closesAt, setClosesAt] = useState("");
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -76,11 +74,14 @@ export default function CreateHivePage() {
           Share the contributor link with your community. Keep the moderator/recipient links private.
         </p>
 
-        <div className="mt-6 rounded-2xl border p-6 space-y-4">
+        <div className="mt-6 rounded-2xl border p-6 space-y-5">
           <div>
             <p className="text-sm font-medium">Contributor link (public)</p>
             <p className="mt-1 break-all">{created.contributorLink}</p>
-            <button className="mt-2 w-full rounded-xl border py-3 font-medium" onClick={() => copy(created.contributorLink)}>
+            <button
+              className="mt-2 w-full rounded-xl border py-3 font-medium"
+              onClick={() => copy(created.contributorLink)}
+            >
               Copy contributor link
             </button>
           </div>
@@ -88,7 +89,10 @@ export default function CreateHivePage() {
           <div>
             <p className="text-sm font-medium">Moderator link (private)</p>
             <p className="mt-1 break-all">{created.moderatorLink}</p>
-            <button className="mt-2 w-full rounded-xl border py-3 font-medium" onClick={() => copy(created.moderatorLink)}>
+            <button
+              className="mt-2 w-full rounded-xl border py-3 font-medium"
+              onClick={() => copy(created.moderatorLink)}
+            >
               Copy moderator link
             </button>
           </div>
@@ -96,18 +100,28 @@ export default function CreateHivePage() {
           <div>
             <p className="text-sm font-medium">Recipient link (private)</p>
             <p className="mt-1 break-all">{created.recipientLink}</p>
-            <button className="mt-2 w-full rounded-xl border py-3 font-medium" onClick={() => copy(created.recipientLink)}>
+            <button
+              className="mt-2 w-full rounded-xl border py-3 font-medium"
+              onClick={() => copy(created.recipientLink)}
+            >
               Copy recipient link
             </button>
           </div>
 
-          <button
-            className="w-full rounded-xl bg-black text-white py-3 font-medium"
-            onClick={() => router.push(`/hive/${created.hiveId}?token=${created.moderatorLink.split("token=")[1]}`)}
+          <a
+            className="block w-full text-center rounded-xl bg-black text-white py-3 font-medium"
+            href={created.moderatorLink}
           >
             Open hive as moderator
-          </button>
+          </a>
         </div>
+
+        <button
+          className="mt-6 w-full rounded-xl border py-3 font-medium"
+          onClick={() => setCreated(null)}
+        >
+          Create another hive
+        </button>
       </main>
     );
   }
@@ -119,17 +133,29 @@ export default function CreateHivePage() {
       <div className="mt-8 space-y-4">
         <div>
           <label className="block text-sm font-medium">Hive title</label>
-          <input className="mt-1 w-full rounded-lg border p-2" value={title} onChange={(e) => setTitle(e.target.value)} />
+          <input
+            className="mt-1 w-full rounded-lg border p-2"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+          />
         </div>
 
         <div>
           <label className="block text-sm font-medium">Recipient name</label>
-          <input className="mt-1 w-full rounded-lg border p-2" value={recipientName} onChange={(e) => setRecipientName(e.target.value)} />
+          <input
+            className="mt-1 w-full rounded-lg border p-2"
+            value={recipientName}
+            onChange={(e) => setRecipientName(e.target.value)}
+          />
         </div>
 
         <div>
           <label className="block text-sm font-medium">Mode</label>
-          <select className="mt-1 w-full rounded-lg border p-2" value={mode} onChange={(e) => setMode(e.target.value as any)}>
+          <select
+            className="mt-1 w-full rounded-lg border p-2"
+            value={mode}
+            onChange={(e) => setMode(e.target.value as any)}
+          >
             <option value="live">Live</option>
             <option value="reveal">Reveal</option>
           </select>
@@ -138,18 +164,32 @@ export default function CreateHivePage() {
         {mode === "reveal" && (
           <div>
             <label className="block text-sm font-medium">Reveal date/time</label>
-            <input type="datetime-local" className="mt-1 w-full rounded-lg border p-2" value={revealAt} onChange={(e) => setRevealAt(e.target.value)} />
+            <input
+              type="datetime-local"
+              className="mt-1 w-full rounded-lg border p-2"
+              value={revealAt}
+              onChange={(e) => setRevealAt(e.target.value)}
+            />
           </div>
         )}
 
         <div>
-          <label className="block text-sm font-medium">Closure (Harvest) date/time</label>
-          <input type="datetime-local" className="mt-1 w-full rounded-lg border p-2" value={closesAt} onChange={(e) => setClosesAt(e.target.value)} />
+          <label className="block text-sm font-medium">Closure date/time</label>
+          <input
+            type="datetime-local"
+            className="mt-1 w-full rounded-lg border p-2"
+            value={closesAt}
+            onChange={(e) => setClosesAt(e.target.value)}
+          />
         </div>
 
         {error && <p className="text-red-600 text-sm">{error}</p>}
 
-        <button onClick={handleCreate} disabled={loading} className="w-full rounded-xl bg-black text-white py-3 font-medium disabled:opacity-50">
+        <button
+          onClick={handleCreate}
+          disabled={loading}
+          className="w-full rounded-xl bg-black text-white py-3 font-medium disabled:opacity-50"
+        >
           {loading ? "Creating..." : "Create Hive"}
         </button>
       </div>
